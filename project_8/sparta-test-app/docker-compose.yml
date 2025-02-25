@@ -1,0 +1,40 @@
+services:
+  nginx:
+    image: nginx:latest
+    ports:
+      - "80:80"  # Forward external traffic to nginx
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro  # Use custom nginx config
+    container_name: nginx-reverse-proxy
+    depends_on:
+      - app
+  app:
+    build:
+      context: .
+      args:
+        - DB_HOST=mongodb://mongo_db:27017/posts  # Define DB_HOST before build
+    container_name: sparta-test-app
+    ports:
+      - "3000:3000"  # Expose Node.js directly (for debugging)
+    depends_on:
+      mongo_db:
+        condition: service_healthy  # Ensure MongoDB is fully ready before app starts
+    environment:
+      - DB_HOST=mongodb://mongo_db:27017/posts
+  mongo_db:
+    image: mongo:7.0
+    container_name: mongodb
+    restart: always
+    ports:
+      - "27017:27017"  # Optional, only needed if you want to connect to MongoDB from your local machine
+    volumes:
+      - mongo_db_data:/data/db  # Persist MongoDB data
+    healthcheck:  # Add health check to ensure MongoDB is fully ready before app starts
+      test: ["CMD", "mongosh", "--eval", "db.runCommand({ ping: 1 })"]
+      interval: 10s
+      retries: 5
+      start_period: 10s
+  
+volumes:
+  mongo_db_data:
+
