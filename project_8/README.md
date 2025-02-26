@@ -669,3 +669,18 @@ http {
   - have separate nginx and app compared to previous two-tier deployments hence `proxy_pass` forwarding to app rather than localhost. Typically one container equals one service.
   - mongodb and nginx images pulled from dockerhub, whereas app is building an image from the dockerfile. If dockerfile is changed and `docker compose up` is run, then will create new image else will use existing image.
   - setup tested and working on local machine i.e. can access app and posts page. Need to test on EC2 instance.
+
+- task blockers:
+  - networking aspect e.g. separating nginx from app means proxy_pass should refer to app not localhost.
+  - somewhat complexity of adding health check to mongo_db service to ensure app starts after db is healthy and accepting connections.
+  - some issues with reseeding initially.
+
+- benefits of using docker compose for two-tier app deployment:
+  - containerisation much faster deployment than VMs, less resource intensive.
+  - simple single command can deploy our app and db in seconds.
+  - compared to bash scripts, much less configuration as nginx and mongodb has many of the dependencies previously installed manually. So compose config very minimal as a result.
+  - no need for pm2, docker can run the containers in detached mode!
+  - default bridge network allows containers on same host to talk automatically. Super useful!
+  - useful container logs.
+  - health checks on containers.
+  - separating nginx from app resulted in a more "microservices" appproach.
