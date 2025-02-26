@@ -647,7 +647,7 @@ volumes:
 
 - nginx.conf
 
-```bash
+```nginx
 events {}
 
 http {
