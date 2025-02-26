@@ -8,17 +8,32 @@
       - [Linux Processes and Host OS Kernel](#linux-processes-and-host-os-kernel)
       - [Container isolation mechanisms](#container-isolation-mechanisms)
       - [Linux Namespaces](#linux-namespaces)
-  - [Architecture](#architecture)
+  - [What is Docker?](#what-is-docker)
+    - [Architecture](#architecture)
+    - [How it works](#how-it-works)
   - [Microservices with Docker](#microservices-with-docker)
     - [What are microservices in the context of docker?](#what-are-microservices-in-the-context-of-docker)
     - [How are microservices created using docker?](#how-are-microservices-created-using-docker)
     - [Benefits of using docker for microservices](#benefits-of-using-docker-for-microservices)
+  - [Multi-container orchestration with Docker Compose](#multi-container-orchestration-with-docker-compose)
+    - [What is Docker Compose?](#what-is-docker-compose)
+    - [How does it work?](#how-does-it-work)
+    - [Why use Docker Compose?](#why-use-docker-compose)
   - [Install Docker](#install-docker)
   - [Commands](#commands)
     - [Images](#images)
     - [DockerHub](#dockerhub)
     - [General](#general)
     - [Containers](#containers)
+    - [Compose](#compose)
+  - [Exercises](#exercises)
+    - [Run your first Container](#run-your-first-container)
+    - [Run Nginx Web Server](#run-nginx-web-server)
+    - [Modify nginx default page inside running container](#modify-nginx-default-page-inside-running-container)
+    - [Run multiple containers](#run-multiple-containers)
+    - [Create dockerfile to build custom nginx image](#create-dockerfile-to-build-custom-nginx-image)
+    - [Push custom nginx image to DockerHub](#push-custom-nginx-image-to-dockerhub)
+  - [deploy two tier app with docker compose](#deploy-two-tier-app-with-docker-compose)
 
 ## Fundamentals
 
@@ -116,9 +131,28 @@ Linux provides two main features that enable container isolation:
   - **Lightweight Isolation**: Because namespaces share the host’s kernel while isolating only the necessary components, containers start up quickly and use fewer resources compared to full virtual machines.
   - **Security and Stability**: Isolation minimises the risk that processes in one container can affect those in another, thereby enhancing security and system stability.
 
-## Architecture
+## What is Docker?
+
+- platform that packages applications and their dependencies into standardised units called containers
+- containers run consistently across different environments, solely requires the installation of docker to run the container exactly the same in test/prod as on your local machine.
+- container process is isolated from the host machine (see fundamentals above).
+- solves the problem of "it works on my machine!"
+
+### Architecture
 
 ![docker architecture](images/docker-architecture.webp)
+
+### How it works
+
+- **client server** model
+- **client**: handles user commands, sneds request to dameon using REST API.
+- **daemon (dockerd)**: background service that does the actual work of building, running and managing containers. Listents to API requests from the client and handles them e.g. pull/create image, start/stop container, network/volume management.
+- **dockerfile**: script (can think of it as a recipe) to create docker image. Need to specify environment, dependencies, and commands needed to run an application inside a container.
+- **docker images**: read only blueprint to create containers. Created using dockerfile and stored in dockerhub.
+- **docker container**: running instance of an image.
+- **docker registry**: storage location for docker images. DockerHub is default public registry, can push and pull images from there. But also can use private registries e.g. Azure Container Registry.
+- **docker volumes**: persistent storage mechanism for containers, used to store data that should survive container restars.
+- **docker networks**: manages how containers communicate with each other and the outside world.
 
 ## Microservices with Docker
 
@@ -127,6 +161,8 @@ Linux provides two main features that enable container isolation:
 - Microservices is an architectural style where an application is broken down into smaller, independent services that communicate with each other. Each microservice is responsible for a specific business function and runs as a separate process.
 
 - Docker plays a key role in microservices by allowing each microservice to be packaged as a lightweight container. These containers can run independently, communicate via APIs, and be deployed across different environments seamlessly.
+
+- See Spotify success story. Migrated from monolithic arhictecture to microservices using Docker.
 
 ### How are microservices created using docker?
 
@@ -194,9 +230,34 @@ Linux provides two main features that enable container isolation:
 
 6. **Efficient Resource Utilisation** – Containers share the same OS kernel, reducing overhead.
 
+## Multi-container orchestration with Docker Compose
+
+### What is Docker Compose?
+
+- tool to define and run multi-container docker applications.
+- uses yml config file to manage services, networks, and volumes.
+- can orchestrate services together e.g. start, stop, rebuild etc.
+
+### How does it work?
+
+- definitions in yml file
+- potential .env file for environment variable configuration
+- compose CLI processes commands like `up`, `down`, `build`. And parses config files and validates syntax.
+- orchestration with service management, resource management and service discovery.
+
+### Why use Docker Compose?
+
+- simplify configuration: define entire app stack in single yml file.
+- reproducable environments: create consistent dev, test and prod environments.
+- single command management: start, stop and rebuild services with single command.
+- auto container networking: built-in service discovery between containers.
+- env variable management: easy configuration across different environments.
+- volume management: persist data storage across container restarts.
+
 ## Install Docker
 
 - Docker desktop: [Install](https://docs.docker.com/desktop)
+- includes Docker Engine and Docker Compose CLI.
 
 ## Commands
 
@@ -345,3 +406,266 @@ docker ps --all
 ```bash
 docker container stats
 ```
+
+### Compose
+
+- Start application in detached mode
+
+```bash
+docker compose up -d
+```
+
+- check running services.
+
+```bash
+docker compose ps
+```
+
+- check real-time logs.
+
+```bash
+docker compose logs -f
+```
+
+- stop application
+
+```bash
+docker compose down
+```
+
+- list images
+
+```bash
+docker compose images
+```
+
+## Exercises
+
+### Run your first Container
+
+```bash
+docker run hello-world
+```
+
+- pulls hello-world image from Docker Hub if not found locally
+- uses the image to create a running container
+
+### Run Nginx Web Server
+
+1. Pull lates nginx image.
+
+    ```bash
+    docker pull nginx
+    ```
+
+2. Run nginx container
+
+    ```bash
+    docker run -d -p 80:80 nginx
+    ```
+
+   - `-d`: detached mode
+   - `-p 80:80`: map host port 80 to container port 80
+
+3. Access nginx webpage.
+
+    `http://localhost`
+
+4. Stop the container.
+
+    ```bash
+    docker stop <container_id>
+    ```
+
+   - confirm container has stopped with `docker ps`.
+
+### Modify nginx default page inside running container
+
+- many images including nginx built on ubuntu or some form of lightweight linux as a base so can run interactive terminal inside the container as below.
+
+```bash
+docker exec -it <container_id> bash
+```
+
+- edit nginx page:
+
+```bash
+nano /usr/share/nginx/html/index.html
+```
+
+- this should update nginx home page immediately.
+
+### Run multiple containers
+
+- run first nginx container as before.
+
+```bash
+docker run -d -p 80:80 nginx
+```
+
+- try running second container on same port.
+
+```bash
+docker run -d -p 80:80 daraymonsta/nginx-257:dreamteam
+```
+
+- results in error: port already allocated.
+- try run on a different host port.
+
+```bash
+docker run -d -p 90:80 daraymonsta/nginx-257:dreamteam
+```
+
+- should work now!
+
+### Create dockerfile to build custom nginx image
+
+- project directory: custom_nginx/
+- create custom `index.html`:
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Custom Nginx</title>
+</head>
+<body>
+    <h1>Welcome to Custom Nginx!</h1>
+</body>
+</html>
+```
+
+- create `DockerFile`.
+
+```dockerfile
+FROM nginx
+COPY index.html /usr/share/nginx/html/
+EXPOSE 80
+```
+
+- build image.
+
+```bash
+docker build -t custom-nginx:v1 .
+```
+
+- run container.
+
+```bash
+docker run -d -p 80:80 custom-nginx:v1
+```
+
+### Push custom nginx image to DockerHub
+
+- need to login to dockerhub.
+
+```bash
+docker login
+```
+
+- after authentication, need to tag the image.
+
+```bash
+docker tag custom-nginx username/custom-nginx
+```
+
+- push to dockerhub.
+
+```bash
+docker push username/custom-nginx
+```
+
+- assuming public visbility of the image, now anyone can run it on their machine!
+
+```bash
+docker run -d -p host_port:container_port username/custom-nginx
+```
+
+## deploy two tier app with docker compose
+
+- will create separate services for nginx, app and mongodb.
+- will also define volume for mongodb for persistent storage.
+
+- dockerfile:
+
+```dockerfile
+FROM node:latest
+
+# Set working directory
+WORKDIR /app
+
+# Copy your Node.js application into the container
+COPY ./app/ /app/
+
+# Expose the port (assuming your Node.js app listens on 3000)
+EXPOSE 3000
+
+# Install dependencies & start app (ensures MongoDB is ready)
+CMD npm install && npm start
+```
+
+- docker-compose.yml
+
+```yaml
+services:
+  nginx:
+    image: nginx:latest
+    ports:
+      - "80:80"  # map port 80 (host) to port 80 (container) for http traffic
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro  # Use custom nginx config (bind mount, read only)
+    container_name: nginx-reverse-proxy
+    depends_on:
+      - app
+  app:
+    build:
+      context: .
+    image: sparta-test-app
+    container_name: sparta-test-app
+    ports:
+      - "3000:3000"  # Expose Node.js directly (for debugging)
+    depends_on:
+      mongo_db:
+        condition: service_healthy  # Ensure MongoDB is fully ready before app starts
+    environment:
+      - DB_HOST=mongodb://mongo_db:27017/posts
+  mongo_db:
+    image: mongo:7.0
+    container_name: mongodb
+    restart: always
+    volumes:
+      - mongo_db_data:/data/db  # Persist MongoDB data
+    healthcheck:  # Add health check to ensure MongoDB is fully ready before app starts
+      test: ["CMD", "mongosh", "--eval", "db.runCommand({ ping: 1 })"] # Check if MongoDB is responsive
+      interval: 10s # Check every 10 seconds
+      retries: 5 # Retry 5 times before failing
+      start_period: 10s # Wait 10 seconds before starting health checks
+  
+volumes:
+  mongo_db_data:
+```
+
+- nginx.conf
+
+```bash
+events {}
+
+http {
+    server {
+        listen 80;
+
+        location / {
+            proxy_pass http://app:3000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+    }
+}
+```
+
+- note:
+  - uses default bridge network so containers can communicate with each other using service name
+  - `depends on` ensures database *starts* before app, however using healthcheck to ensure database is healthy (ping) before app is started.
+  - have separate nginx and app compared to previous two-tier deployments hence `proxy_pass` forwarding to app rather than localhost. Typically one container equals one service.
+  - mongodb and nginx images pulled from dockerhub, whereas app is building an image from the dockerfile. If dockerfile is changed and `docker compose up` is run, then will create new image else will use existing image.
+  - setup tested and working on local machine i.e. can access app and posts page. Need to test on EC2 instance.
