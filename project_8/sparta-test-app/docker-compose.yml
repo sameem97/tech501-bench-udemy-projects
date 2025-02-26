@@ -2,17 +2,16 @@ services:
   nginx:
     image: nginx:latest
     ports:
-      - "80:80"  # Forward external traffic to nginx
+      - "80:80"  # map port 80 (host) to port 80 (container) for http traffic
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro  # Use custom nginx config
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro  # Use custom nginx config (bind mount, read only)
     container_name: nginx-reverse-proxy
     depends_on:
       - app
   app:
     build:
       context: .
-      args:
-        - DB_HOST=mongodb://mongo_db:27017/posts  # Define DB_HOST before build
+    image: sparta-test-app
     container_name: sparta-test-app
     ports:
       - "3000:3000"  # Expose Node.js directly (for debugging)
@@ -28,10 +27,10 @@ services:
     volumes:
       - mongo_db_data:/data/db  # Persist MongoDB data
     healthcheck:  # Add health check to ensure MongoDB is fully ready before app starts
-      test: ["CMD", "mongosh", "--eval", "db.runCommand({ ping: 1 })"]
-      interval: 10s
-      retries: 5
-      start_period: 10s
+      test: ["CMD", "mongosh", "--eval", "db.runCommand({ ping: 1 })"] # Check if MongoDB is responsive
+      interval: 10s # Check every 10 seconds
+      retries: 5 # Retry 5 times before failing
+      start_period: 10s # Wait 10 seconds before starting health checks
   
 volumes:
   mongo_db_data:

@@ -1,10 +1,10 @@
 FROM node:latest
 
 # Set working directory
-WORKDIR /usr/src/app
+WORKDIR /app
 
 # Copy your Node.js application into the container
-COPY ./app/ /usr/src/app/
+COPY ./app/ /app/
 
 # Expose the port (assuming your Node.js app listens on 3000)
 EXPOSE 3000
