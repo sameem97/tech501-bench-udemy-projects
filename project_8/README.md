@@ -33,7 +33,7 @@
     - [Run multiple containers](#run-multiple-containers)
     - [Create dockerfile to build custom nginx image](#create-dockerfile-to-build-custom-nginx-image)
     - [Push custom nginx image to DockerHub](#push-custom-nginx-image-to-dockerhub)
-  - [deploy two tier app with docker compose](#deploy-two-tier-app-with-docker-compose)
+    - [Deploy two tier app with docker compose](#deploy-two-tier-app-with-docker-compose)
 
 ## Fundamentals
 
@@ -581,7 +581,7 @@ docker push username/custom-nginx
 docker run -d -p host_port:container_port username/custom-nginx
 ```
 
-## deploy two tier app with docker compose
+### Deploy two tier app with docker compose
 
 - will create separate services for nginx, app and mongodb.
 - will also define volume for mongodb for persistent storage.
