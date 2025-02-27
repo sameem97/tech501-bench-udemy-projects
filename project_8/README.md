@@ -34,6 +34,7 @@
     - [Create dockerfile to build custom nginx image](#create-dockerfile-to-build-custom-nginx-image)
     - [Push custom nginx image to DockerHub](#push-custom-nginx-image-to-dockerhub)
     - [Deploy two tier app with docker compose](#deploy-two-tier-app-with-docker-compose)
+  - [Project Updates](#project-updates)
 
 ## Fundamentals
 
@@ -684,3 +685,7 @@ http {
   - useful container logs.
   - health checks on containers.
   - separating nginx from app resulted in a more "microservices" appproach.
+
+## Project Updates
+
+- docker compose setup for two-tier app tested and working on EC2 instance.
