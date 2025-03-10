@@ -47,8 +47,31 @@
     - [Copy Module](#copy-module)
     - [File Module](#file-module)
     - [Setup Module](#setup-module)
-  - [Task: Deploy two-tier app with Ansible](#task-deploy-two-tier-app-with-ansible)
-    - [Target Architecture](#target-architecture)
+  - [Playbooks](#playbooks)
+  - [Tasks](#tasks)
+    - [Create EC2 instances for Ansible controller and app managed node](#create-ec2-instances-for-ansible-controller-and-app-managed-node)
+    - [Setup dependencies for the Ansible controller and app node](#setup-dependencies-for-the-ansible-controller-and-app-node)
+    - [Use ad hoc commands](#use-ad-hoc-commands)
+      - [Test connectivity](#test-connectivity)
+      - [Get OS](#get-os)
+      - [Get date](#get-date)
+      - [Update and Upgrade packages](#update-and-upgrade-packages)
+        - [Command Module](#command-module-1)
+        - [Shell Module](#shell-module)
+        - [APT module](#apt-module)
+      - [Copy test file](#copy-test-file)
+    - [Create and run playbook to install nginx on target node](#create-and-run-playbook-to-install-nginx-on-target-node)
+    - [Create and run playbook to provision app VM](#create-and-run-playbook-to-provision-app-vm)
+    - [NPM Start](#npm-start)
+      - [PM2](#pm2)
+    - [Create and run playbook to print facts gathered](#create-and-run-playbook-to-print-facts-gathered)
+    - [Create EC2 instance for db managed node](#create-ec2-instance-for-db-managed-node)
+    - [Create and run playbook to update and upgrade web and db groups of machines](#create-and-run-playbook-to-update-and-upgrade-web-and-db-groups-of-machines)
+    - [Create and run playbook to install mongodb](#create-and-run-playbook-to-install-mongodb)
+    - [Create and run playbooks to provision the app and database](#create-and-run-playbooks-to-provision-the-app-and-database)
+  - [Challenges](#challenges)
+  - [What I learnt from this project](#what-i-learnt-from-this-project)
+  - [Benefits I have seen from this project](#benefits-i-have-seen-from-this-project)
 
 ## Fundamentals
 
@@ -484,7 +507,805 @@ ansible dbservers -i inventory -m setup -a "filter=ansible_distribution*"
 
 - will only show facts related to the OS distribution.
 
-## Task: Deploy two-tier app with Ansible
+## Playbooks
 
-### Target Architecture
+...
 
+## Tasks
+
+- The tasks described below will build up to deploy our two-tier app using Ansible.
+
+- Target architecture:
+
+![target architecture](images/target_architecture.jpg)
+
+- note, there will be some miscallaneous tasks below for learning purposes rather than for the app deployment.
+
+### Create EC2 instances for Ansible controller and app managed node
+
+- Controller:
+  - name: tech501-sameem-ubuntu-2204-ansible-controller
+  - size: t3.micro
+  - nsg: allow SSH
+  - key pair: use existing
+  - image: ubuntu server 22.04 LTS
+
+- Managed node (app):
+  - name: tech501-sameem-ubuntu-2204-ansible-target-node-app
+  - size: t3.micro
+  - nsg: allow SSH, HTTP
+  - key pair: use existing
+  - image: ubuntu server 22.04 LTS
+
+- above created via AWS console.
+- confirmed SSH access from my local machine.
+
+### Setup dependencies for the Ansible controller and app node
+
+- Controller:
+  - SSH in.
+  - Install Ansible
+  - Add private key to access managed nodes. Set read-only access.
+  - Create ansible folder with 3 files:
+    - ansible.cfg
+    - inventory
+    - roles
+
+ansible.cfg:
+
+```ansible
+[defaults]
+inventory = <inventory_file_path>
+remote_user = <remote_username>
+host_key_checking = <host_key_checking>
+stdout_callback = yaml
+
+[privilege_escalation]
+become = <become>
+become_method = <become_method>
+become_user = <privileged_username>
+become_ask_pass = <become_ask_pass>
+```
+
+inventory:
+
+```ansible
+[web]
+ec2-instance-app ansible_host=<app_private_ip> ansible_connection=ssh ansible_ssh_private_key_file=<private_key_path>
+```
+
+### Use ad hoc commands
+
+#### Test connectivity
+
+- use ping module to test connectivity to all hosts in web group:
+
+```bash
+ansible web -i inventory -m ping
+```
+
+- should give `SUCCESS` output.
+
+#### Get OS
+
+- let's try getting the OS via the setup module.
+
+```bash
+ansible web -i inventory -m setup -a "filter=ansible_distribution*"
+```
+
+![Linux Distribution](images/distro_screenshot.png)
+
+- as seen in the output above, can use the setup module with the specified filter to retrieve the linux distribution details for the machines in the web group.
+- note, `*` is wildcard character so will return facts beginning with `ansible_distribution` (see above).
+- can also use `grep` rather than filter function.
+
+#### Get date
+
+- use setup module once again as we want to obtain a `fact` about the managed nodes.
+
+```bash
+ansible web -i inventory -m setup -a "filter=ansible_date*"
+```
+
+![Date](images/date_screenshot.png)
+
+- note, can play around with the filters by seeing all facts (json output) and exploring what details we need extracting.
+- can also comma separate filters to apply multiple filters.
+
+#### Update and Upgrade packages
+
+##### Command Module
+
+- need to run update and upgrade commands separately as command module does not support use of shell operators e.g. && so would run `apt update && apt upgrade -y` as a single command i.e. providing arguments to `apt update`
+
+- apt update:
+
+```bash
+ansible web -i inventory -a "apt update" --become
+```
+
+![apt update command](images/apt_update_command.png)
+
+- apt upgrade:
+
+```bash
+ansible web -i inventory -a "apt upgrade -y" --become
+```
+
+![apt upgrade command](images/apt_upgrade_command.png)
+
+##### Shell Module
+
+- recommended to use shell module rather than command module for running shell commands
+
+```bash
+ansible web -i inventory -m shell -a "apt update && apt upgrade -y" --become
+```
+
+![update packages shell](images/update_packages_shell.png)
+
+##### APT module
+
+```bash
+ansible web -i inventory -m apt -a "update_cache=yes upgrade=dist" --become
+```
+
+- `-a "update_cache=yes upgrade=dist"` equivalent to `sudo apt update && sudo apt upgrade -y`
+- `--become` needed to run the command with sudo since root access is required to update packages
+
+- output as below:
+
+![update packages apt](images/update_packages_apt.png)
+
+- as visible, my packages are already up to date.
+
+#### Copy test file
+
+- create test_file.txt
+- use copy module:
+
+```bash
+ansible web -i inventory -m copy -a "src=/home/ubuntu/ansible/test_file.txt dest=/home/ubuntu/test_file.txt mode=0400"
+```
+
+- note, recommended to use full file paths vs relative.
+- can set permissions with `mode` in this case owner read only.
+- confirm file has been transferred on the managed node.
+
+### Create and run playbook to install nginx on target node
+
+- create playbook: `install_nginx.yml`
+
+```yml
+---
+- name: install nginx play
+  hosts: web
+  become: true
+  tasks:
+    - name: get package facts
+      package_facts:
+        manager: auto
+
+    - name: update apt package index
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: install nginx package
+      apt:
+        name: nginx
+        state: present
+      register: nginx_install
+
+    - name: ensure nginx service is enabled and started
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+      register: nginx_service
+
+    - name: collect nginx service facts
+      service_facts:
+
+    - name: check if nginx configuration exists
+      stat:
+        path: /etc/nginx/nginx.conf
+      register: nginx_conf
+
+    - name: display nginx information
+      debug:
+        msg:
+          - "Nginx installed: {{ 'Yes' if 'nginx' in ansible_facts.packages else 'No' }}"
+          - "Nginx version: {{ ansible_facts.packages['nginx'][0].version if 'nginx' in ansible_facts.packages else 'Not installed' }}"
+          - "Nginx service status: {{ 'Active' if ansible_facts.services['nginx.service'].state == 'running' else 'Not running' }}"
+          - "Nginx configuration exists: {{ nginx_conf.stat.exists }}"
+          - "Installation changed: {{ nginx_install.changed }}"
+          - "Service status changed: {{ nginx_service.changed }}"
+```
+
+- run playbook:
+
+```bash
+ansible-playbook -i inventory install_nginx.yml
+```
+
+- check output messages.
+- confirm nginx loads up when you visit managed node (app) public IP:
+
+![nginx homepage](images/nginx_homepage.png)
+
+### Create and run playbook to provision app VM
+
+### NPM Start
+
+- create playbook: `prov_app_with_npm_start.yml`
+
+```ansible
+---
+- name: Install app dependencies and run app with npm start
+  hosts: web
+  become: true
+
+  tasks:
+
+    - name: Add NodeSource repository for Node.js 20.x
+      shell: curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+      args:
+        executable: /bin/bash
+        creates: /etc/apt/sources.list.d/nodesource.list  # Ensures NodeSource repo exists
+
+    - name: Upgrade all system packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Install Node.js
+      apt:
+        name: nodejs
+        state: present
+
+    - name: Remove app if already existing
+      file:
+        path: "/home/ubuntu/tech501-sparta-app"
+        state: absent # ensures the path is absent
+
+    - name: Clone or update repository
+      git:
+        repo: "https://github.com/sameem97/tech501-sparta-app.git"
+        dest: "/home/ubuntu/tech501-sparta-app"
+        version: "main"
+        force: yes
+
+    - name: Install npm dependencies
+      command: npm install --loglevel verbose
+      args:
+        chdir: "/home/ubuntu/tech501-sparta-app/app"
+
+    - name: Stop any running Node.js application
+      shell: sudo pkill -9 -f 'node'
+      ignore_errors: yes
+
+    - name: Start the Node.js application
+      shell: "exec nohup npm start > app.log 2>&1 &"
+      args:
+        chdir: "/home/ubuntu/tech501-sparta-app/app"
+```
+
+- run playbook
+- check output messages
+- confirm app homepage loads up when you visit app public IP port 3000.
+
+![homepage](images/homepage.png)
+
+#### PM2
+
+- use pm2 node.js process manager to run app in the background
+- create playbook: `prov_app_with_pm2.yml`
+
+```ansible
+---
+- name: Install app dependencies and run app with pm2
+  hosts: web
+  become: true
+
+  tasks:
+
+    - name: Add NodeSource repository for Node.js 20.x
+      shell: curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+      args:
+        executable: /bin/bash
+        creates: /etc/apt/sources.list.d/nodesource.list  # Ensures NodeSource repo exists
+
+    - name: Upgrade all system packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Install Node.js
+      apt:
+        name: nodejs
+        state: present
+
+    - name: Install pm2 globally
+      npm:
+        name: pm2
+        global: yes
+        state: present
+
+    - name: Remove app if already existing
+      file:
+        path: "/home/ubuntu/tech501-sparta-app"
+        state: absent # ensures the path is absent
+
+    - name: Clone or update repository
+      git:
+        repo: "https://github.com/sameem97/tech501-sparta-app.git"
+        dest: "/home/ubuntu/tech501-sparta-app"
+        version: "main"
+        force: yes
+
+    - name: Install npm dependencies
+      command: npm install --loglevel verbose
+      args:
+        chdir: "/home/ubuntu/tech501-sparta-app/app"
+
+    - name: Stop any running Node.js application
+      shell: pm2 delete app || true
+      ignore_errors: yes
+
+    - name: Start the Node.js application
+      shell: pm2 start app.js --name app --env production --update-env
+      args:
+        chdir: "/home/ubuntu/tech501-sparta-app/app"
+
+    - name: Ensure PM2 auto-starts on reboot for user 'ubuntu'
+      command: pm2 startup systemd -u ubuntu --hp /home/ubuntu
+      args:
+        creates: /etc/systemd/system/pm2-ubuntu.service  # only run if systemd service not already defined
+
+    - name: Save pm2 process list
+      command: pm2 save
+```
+
+### Create and run playbook to print facts gathered
+
+- facts - everything the controller knows about the remote host e.g. OS, IP addresses, attached filesystems etc
+
+```ansible
+---
+- name: Print facts on all hosts
+  hosts: all
+  gather_facts: yes
+
+  tasks:
+    - name: Print gathered facts on all hosts
+      debug:
+        var: ansible_facts
+```
+
+- run playbook
+- output should be long list of facts, some nested.
+- facts can be used e.g. in debug msg for outputting during playbook run.
+- can also be referenced as inputs for modules.
+
+### Create EC2 instance for db managed node
+
+- Managed node (db):
+  - name: tech501-sameem-ubuntu-2204-ansible-target-node-db
+  - size: t3.micro
+  - nsg: allow SSH, mongodb
+  - key pair: use existing
+  - image: ubuntu server 22.04 LTS
+
+- as previously, ensure we update hosts file on the controller with the db node, and add the public key to the db instance.
+- ensure controller can ping both app and db instances.
+
+### Create and run playbook to update and upgrade web and db groups of machines
+
+- create playbook: `update_upgrade_all.yml`
+
+```ansible
+---
+- name: Update and upgrade all db and web hosts
+  hosts:
+    - web
+    - db
+  become: true
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600  # one hour in seconds, so it will run update after one hour
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist  # upgrades everything on the distro
+```
+
+- best practise to separate this playbook from app deployment playbook as it minimises risks and ensures a stable deployment.
+
+### Create and run playbook to install mongodb
+
+- create playbook: `install_mongodb.yml`
+
+```ansible
+---
+- name: install mongodb version 7.0
+  hosts:
+    - db
+  become: true
+
+  tasks:
+    - name: install gnupg and curl
+      apt:
+        name:
+          - gnupg
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: download mongodb public gpg key (ASCII format)
+      get_url:
+        url: https://www.mongodb.org/static/pgp/server-7.0.asc
+        dest: /tmp/mongodb-server-7.0.asc
+        mode: '0644'
+        force: no # only download key if it doesn't exist
+
+    - name: use dearmor to convert MongoDB gpg key to binary format
+      command: gpg --batch --yes --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg /tmp/mongodb-server-7.0.asc
+
+    - name: Set correct permissions for MongoDB GPG key
+      file:
+        path: /usr/share/keyrings/mongodb-server-7.0.gpg
+        mode: '0644'
+        owner: root
+        group: root
+
+    - name: Remove temporary MongoDB ASCII key file
+      file:
+        path: /tmp/mongodb-server-7.0.asc
+        state: absent
+
+    - name: add mongodb repository to ubuntu package sources
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" 
+        state: present
+        filename: mongodb-org
+
+    - name: reload apt package database
+      apt:
+        update_cache: yes
+      changed_when: false
+
+    - name: install mongodb 7.0
+      apt:
+        name:
+          - mongodb-org=7.0.6
+          - mongodb-org-database=7.0.6
+          - mongodb-org-server=7.0.6
+          - mongodb-mongosh
+          - mongodb-org-mongos=7.0.6
+          - mongodb-org-tools=7.0.6
+        state: present
+```
+
+- ensure mongod service is running:
+
+```bash
+sudo systemctl status mongod
+```
+
+### Create and run playbooks to provision the app and database
+
+- create `prov_db.yml`
+- base will be same as `install_mongodb.yml` (see previous task).
+- need to add tasks to enable mongodb, change bindIp and restart service.
+
+```ansible
+---
+- name: provision mongodb version 7.0 play
+  hosts:
+    - db
+  become: true
+
+  tasks:
+
+    - name: install gnupg and curl
+      apt:
+        name:
+          - gnupg
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: download mongodb public gpg key (ASCII format)
+      get_url:
+        url: https://www.mongodb.org/static/pgp/server-7.0.asc
+        dest: /tmp/mongodb-server-7.0.asc
+        mode: '0644'
+        force: no # only download key if it doesn't exist
+
+    - name: use dearmor to convert MongoDB gpg key to binary format
+      command: gpg --batch --yes --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg /tmp/mongodb-server-7.0.asc
+
+    - name: Set correct permissions for MongoDB GPG key
+      file:
+        path: /usr/share/keyrings/mongodb-server-7.0.gpg
+        mode: '0644'
+        owner: root
+        group: root
+
+    - name: Remove temporary MongoDB ASCII key file
+      file:
+        path: /tmp/mongodb-server-7.0.asc
+        state: absent
+
+    - name: add mongodb repository to ubuntu package sources
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" 
+        state: present
+        filename: mongodb-org
+
+    - name: reload apt package database
+      apt:
+        update_cache: yes
+      changed_when: false
+
+    - name: install mongodb 7.0
+      apt:
+        name:
+          - mongodb-org=7.0.6
+          - mongodb-org-database=7.0.6
+          - mongodb-org-server=7.0.6
+          - mongodb-mongosh
+          - mongodb-org-mongos=7.0.6
+          - mongodb-org-tools=7.0.6
+        state: present
+
+    - name: enable and start mongodb service
+      service:
+        name: mongod
+        state: started
+        enabled: yes
+
+    - name: Change MongoDB bind IP to allow remote connections
+      lineinfile:
+        path: /etc/mongod.conf
+        regexp: '^\s*bindIp:\s*127.0.0.1'  # Regex to match the existing line
+        line: '  bindIp: 0.0.0.0'  # New line content
+        backrefs: yes
+      register: bindip_config
+
+    - name: Restart mongodb service
+      service:
+        name: mongod
+        state: restarted
+      when: bindip_config.changed # only restarts if the bindIp change was made
+```
+
+- run the playbook
+- run adhoc commands to check status of mongodb and bindIp config.
+- confirm mongodb is running:
+
+```bash
+ansible db -i inventory -a "systemctl status mongod" --become
+```
+
+- confirm bindIp has changed:
+
+```bash
+ansible db -i inventory -a "cat /etc/mongod.conf" --become
+```
+
+- create temporary `DB_HOST` environment variable on the app host:
+
+```bash
+export DB_HOST=mongodb://<db_private_ip>:27017/posts
+```
+
+- combine `provision mongodb version 7.0 play` and `provision node.js v20 app play` into single playbook titled: `prov_app_all.yml`.
+- need to add tasks to app play:
+  - set up mongodb connection string
+  - bonus: install nginx and get reverse proxy working
+
+`prov_app_all.yml`:
+
+```ansible
+---
+- name: provision mongodb version 7.0 play
+  hosts:
+    - db
+  become: true
+
+  tasks:
+
+    - name: install gnupg and curl
+      apt:
+        name:
+          - gnupg
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: download mongodb public gpg key (ASCII format)
+      get_url:
+        url: https://www.mongodb.org/static/pgp/server-7.0.asc
+        dest: /tmp/mongodb-server-7.0.asc
+        mode: '0644'
+        force: no # only download key if it doesn't exist
+
+    - name: use dearmor to convert MongoDB gpg key to binary format
+      command: gpg --batch --yes --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg /tmp/mongodb-server-7.0.asc
+
+    - name: Set correct permissions for MongoDB GPG key
+      file:
+        path: /usr/share/keyrings/mongodb-server-7.0.gpg
+        mode: '0644'
+        owner: root
+        group: root
+
+    - name: Remove temporary MongoDB ASCII key file
+      file:
+        path: /tmp/mongodb-server-7.0.asc
+        state: absent
+
+    - name: add mongodb repository to ubuntu package sources
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" 
+        state: present
+        filename: mongodb-org
+
+    - name: reload apt package database
+      apt:
+        update_cache: yes
+      changed_when: false
+
+    - name: install mongodb 7.0
+      apt:
+        name:
+          - mongodb-org=7.0.6
+          - mongodb-org-database=7.0.6
+          - mongodb-org-server=7.0.6
+          - mongodb-mongosh
+          - mongodb-org-mongos=7.0.6
+          - mongodb-org-tools=7.0.6
+        state: present
+
+    - name: enable and start mongodb service
+      service:
+        name: mongod
+        state: started
+        enabled: yes
+
+    - name: Change MongoDB bind IP to allow remote connections
+      lineinfile:
+        path: /etc/mongod.conf
+        regexp: '^\s*bindIp:\s*127.0.0.1'  # Regex to match the existing line
+        line: '  bindIp: 0.0.0.0'  # New line content
+        backrefs: yes
+      register: bindip_config
+
+    - name: Restart mongodb service
+      service:
+        name: mongod
+        state: restarted
+      when: bindip_config.changed # only restarts if the bindIp change was made
+
+- name: provision node.js v20 app play
+  hosts: web
+  become: true
+
+  tasks:
+
+    - name: Add NodeSource repository for Node.js 20.x
+      shell: curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+      args:
+        executable: /bin/bash
+        creates: /etc/apt/sources.list.d/nodesource.list  # Ensures NodeSource repo exists
+
+    - name: Upgrade all system packages
+      apt:
+        update_cache: yes
+        upgrade: yes
+
+    - name: install nginx
+      apt:
+        name: nginx
+        state: present
+
+    - name: enable and start nginx
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Install Node.js
+      apt:
+        name: nodejs
+        state: present
+
+    - name: Install pm2 globally
+      npm:
+        name: pm2
+        global: yes
+        state: present
+
+    - name: Remove app if already existing
+      file:
+        path: "/home/ubuntu/tech501-sparta-app"
+        state: absent # ensures the path is absent
+
+    - name: Clone or update repository
+      git:
+        repo: "https://github.com/sameem97/tech501-sparta-app.git"
+        dest: "/home/ubuntu/tech501-sparta-app"
+        version: "main"
+        force: yes
+
+    - name: configure nginx reverse proxy
+      lineinfile:
+        path: "/etc/nginx/sites-available/default"
+        regexp: '^\s*try_files\s+\$uri\s+\$uri/\s+=404;'
+        line: '    proxy_pass http://127.0.0.1:3000;'  # Replacing with new value        
+        backup: yes
+      register: nginx_config_update
+
+    - name: restart nginx if configuration changed
+      service:
+        name: nginx
+        state: restarted
+      when: nginx_config_update.changed
+
+    - name: set up mongodb connection string persistently
+      lineinfile:
+        path: /etc/environment
+        line:  "DB_HOST=mongodb://{{ hostvars['ec2-instance-db']['ansible_default_ipv4']['address'] }}:27017/posts"
+        create: yes
+
+    - name: Install npm dependencies
+      command: npm install --loglevel verbose
+      args:
+        chdir: "/home/ubuntu/tech501-sparta-app/app"
+
+    - name: Stop any running Node.js application
+      shell: pm2 delete app || true
+      ignore_errors: yes
+
+    - name: Start the Node.js application
+      shell: pm2 start app.js --name app --env production --update-env
+      args:
+        chdir: "/home/ubuntu/tech501-sparta-app/app"
+
+    - name: Ensure PM2 auto-starts on reboot for user 'ubuntu'
+      command: pm2 startup systemd -u ubuntu --hp /home/ubuntu
+      args:
+        creates: /etc/systemd/system/pm2-ubuntu.service  # only run if systemd service not already defined
+
+    - name: Save PM2 process list
+      command: pm2 save
+```
+
+- test playbook runs without errors and the app and posts page work
+
+![homepage](images/homepage.png)
+![posts page](images/posts_page.png)
+
+## Challenges
+
+- making the playbooks idempotent was challenging at times. Use of inbuilt modules vs shell commands helped mitigate this.
+- navigating ansible documentation
+- playbook syntax - need to run a linter in the future
+
+## What I learnt from this project
+
+- how ansible works, including various ways of directing hosts e.g. ad-hoc commands vs playbooks.
+- configuring ansible with ansible.cfg file
+- defining our hosts in inventory file
+- numerous ansible modules to complete even the most minute tasks
+
+## Benefits I have seen from this project
+
+- whilst ansible typically isn't used to create infrastructure, this project shows it is possible and from one playbook, we have both the app and the db running.
+- ansible modules much easier to read than equivalent bash scripts I used previously

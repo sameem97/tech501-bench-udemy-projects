@@ -1,0 +1,44 @@
+---
+- name: install nginx play
+  hosts: web
+  become: true
+  tasks:
+    - name: get package facts
+      package_facts:
+        manager: auto
+
+    - name: update apt package index
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: install nginx package
+      apt:
+        name: nginx
+        state: present
+      register: nginx_install
+
+    - name: ensure nginx service is enabled and started
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+      register: nginx_service
+
+    - name: collect nginx service facts
+      service_facts:
+
+    - name: check if nginx configuration exists
+      stat:
+        path: /etc/nginx/nginx.conf
+      register: nginx_conf
+
+    - name: display nginx information
+      debug:
+        msg:
+          - "Nginx installed: {{ 'Yes' if 'nginx' in ansible_facts.packages else 'No' }}"
+          - "Nginx version: {{ ansible_facts.packages['nginx'][0].version if 'nginx' in ansible_facts.packages else 'Not installed' }}"
+          - "Nginx service status: {{ 'Active' if ansible_facts.services['nginx.service'].state == 'running' else 'Not running' }}"
+          - "Nginx configuration exists: {{ nginx_conf.stat.exists }}"
+          - "Installation changed: {{ nginx_install.changed }}"
+          - "Service status changed: {{ nginx_service.changed }}"

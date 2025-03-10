@@ -1,0 +1,58 @@
+---
+- name: install mongodb version 7.0
+  hosts:
+    - db
+  become: true
+
+  tasks:
+    - name: install gnupg and curl
+      apt:
+        name:
+          - gnupg
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: download mongodb public gpg key (ASCII format)
+      get_url:
+        url: https://www.mongodb.org/static/pgp/server-7.0.asc
+        dest: /tmp/mongodb-server-7.0.asc
+        mode: '0644'
+        force: no # only download key if it doesn't exist
+
+    - name: use dearmor to convert MongoDB gpg key to binary format
+      command: gpg --batch --yes --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg /tmp/mongodb-server-7.0.asc
+
+    - name: Set correct permissions for MongoDB GPG key
+      file:
+        path: /usr/share/keyrings/mongodb-server-7.0.gpg
+        mode: '0644'
+        owner: root
+        group: root
+
+    - name: Remove temporary MongoDB ASCII key file
+      file:
+        path: /tmp/mongodb-server-7.0.asc
+        state: absent
+
+    - name: add mongodb repository to ubuntu package sources
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" 
+        state: present
+        filename: mongodb-org
+
+    - name: reload apt package database
+      apt:
+        update_cache: yes
+      changed_when: false
+
+    - name: install mongodb 7.0
+      apt:
+        name:
+          - mongodb-org=7.0.6
+          - mongodb-org-database=7.0.6
+          - mongodb-org-server=7.0.6
+          - mongodb-mongosh
+          - mongodb-org-mongos=7.0.6
+          - mongodb-org-tools=7.0.6
+        state: present

@@ -1,0 +1,48 @@
+---
+- name: Install app dependencies and run app with npm start
+  hosts: web
+  become: true
+
+  tasks:
+
+    - name: Add NodeSource repository for Node.js 20.x
+      shell: curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+      args:
+        executable: /bin/bash
+        creates: /etc/apt/sources.list.d/nodesource.list  # Ensures NodeSource repo exists
+
+    - name: Upgrade all system packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Install Node.js
+      apt:
+        name: nodejs
+        state: present
+
+    - name: Remove app if already existing
+      file:
+        path: "/home/ubuntu/tech501-sparta-app"
+        state: absent # ensures the path is absent
+
+    - name: Clone or update repository
+      git:
+        repo: "https://github.com/sameem97/tech501-sparta-app.git"
+        dest: "/home/ubuntu/tech501-sparta-app"
+        version: "main"
+        force: yes
+
+    - name: Install npm dependencies
+      command: npm install --loglevel verbose
+      args:
+        chdir: "/home/ubuntu/tech501-sparta-app/app"
+
+    - name: Stop any running Node.js application
+      shell: sudo pkill -9 -f 'node'
+      ignore_errors: yes
+
+    - name: Start the Node.js application
+      shell: "exec nohup npm start > app.log 2>&1 &"
+      args:
+        chdir: "/home/ubuntu/tech501-sparta-app/app"

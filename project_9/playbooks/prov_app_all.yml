@@ -1,0 +1,172 @@
+---
+- name: provision mongodb version 7.0 play
+  hosts:
+    - db
+  become: true
+
+  tasks:
+
+    - name: install gnupg and curl
+      apt:
+        name:
+          - gnupg
+          - curl
+        state: present
+        update_cache: yes
+
+    - name: download mongodb public gpg key (ASCII format)
+      get_url:
+        url: https://www.mongodb.org/static/pgp/server-7.0.asc
+        dest: /tmp/mongodb-server-7.0.asc
+        mode: '0644'
+        force: no # only download key if it doesn't exist
+
+    - name: use dearmor to convert MongoDB gpg key to binary format
+      command: gpg --batch --yes --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg /tmp/mongodb-server-7.0.asc
+
+    - name: Set correct permissions for MongoDB GPG key
+      file:
+        path: /usr/share/keyrings/mongodb-server-7.0.gpg
+        mode: '0644'
+        owner: root
+        group: root
+
+    - name: Remove temporary MongoDB ASCII key file
+      file:
+        path: /tmp/mongodb-server-7.0.asc
+        state: absent
+
+    - name: add mongodb repository to ubuntu package sources
+      apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" 
+        state: present
+        filename: mongodb-org
+
+    - name: reload apt package database
+      apt:
+        update_cache: yes
+      changed_when: false
+
+    - name: install mongodb 7.0
+      apt:
+        name:
+          - mongodb-org=7.0.6
+          - mongodb-org-database=7.0.6
+          - mongodb-org-server=7.0.6
+          - mongodb-mongosh
+          - mongodb-org-mongos=7.0.6
+          - mongodb-org-tools=7.0.6
+        state: present
+
+    - name: enable and start mongodb service
+      service:
+        name: mongod
+        state: started
+        enabled: yes
+
+    - name: Change MongoDB bind IP to allow remote connections
+      lineinfile:
+        path: /etc/mongod.conf
+        regexp: '^\s*bindIp:\s*127.0.0.1'  # Regex to match the existing line
+        line: '  bindIp: 0.0.0.0'  # New line content
+        backrefs: yes
+      register: bindip_config
+
+    - name: Restart mongodb service
+      service:
+        name: mongod
+        state: restarted
+      when: bindip_config.changed # only restarts if the bindIp change was made
+
+- name: provision node.js v20 app play
+  hosts: web
+  become: true
+
+  tasks:
+
+    - name: Add NodeSource repository for Node.js 20.x
+      shell: curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+      args:
+        executable: /bin/bash
+        creates: /etc/apt/sources.list.d/nodesource.list  # Ensures NodeSource repo exists
+
+    - name: Upgrade all system packages
+      apt:
+        update_cache: yes
+        upgrade: yes
+
+    - name: install nginx
+      apt:
+        name: nginx
+        state: present
+
+    - name: enable and start nginx
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Install Node.js
+      apt:
+        name: nodejs
+        state: present
+
+    - name: Install pm2 globally
+      npm:
+        name: pm2
+        global: yes
+        state: present
+
+    - name: Remove app if already existing
+      file:
+        path: "/home/ubuntu/tech501-sparta-app"
+        state: absent # ensures the path is absent
+
+    - name: Clone or update repository
+      git:
+        repo: "https://github.com/sameem97/tech501-sparta-app.git"
+        dest: "/home/ubuntu/tech501-sparta-app"
+        version: "main"
+        force: yes
+
+    - name: configure nginx reverse proxy
+      lineinfile:
+        path: "/etc/nginx/sites-available/default"
+        regexp: '^\s*try_files\s+\$uri\s+\$uri/\s+=404;'
+        line: '    proxy_pass http://127.0.0.1:3000;'  # Replacing with new value        
+        backup: yes
+      register: nginx_config_update
+
+    - name: restart nginx if configuration changed
+      service:
+        name: nginx
+        state: restarted
+      when: nginx_config_update.changed
+
+    - name: set up mongodb connection string persistently
+      lineinfile:
+        path: /etc/environment
+        line:  "DB_HOST=mongodb://{{ hostvars['ec2-instance-db']['ansible_default_ipv4']['address'] }}:27017/posts"
+        create: yes
+
+    - name: Install npm dependencies
+      command: npm install --loglevel verbose
+      args:
+        chdir: "/home/ubuntu/tech501-sparta-app/app"
+
+    - name: Stop any running Node.js application
+      shell: pm2 delete app || true
+      ignore_errors: yes
+
+    - name: Start the Node.js application
+      shell: pm2 start app.js --name app --env production --update-env
+      args:
+        chdir: "/home/ubuntu/tech501-sparta-app/app"
+
+    - name: Ensure PM2 auto-starts on reboot for user 'ubuntu'
+      command: pm2 startup systemd -u ubuntu --hp /home/ubuntu
+      args:
+        creates: /etc/systemd/system/pm2-ubuntu.service  # only run if systemd service not already defined
+
+    - name: Save PM2 process list
+      command: pm2 save
