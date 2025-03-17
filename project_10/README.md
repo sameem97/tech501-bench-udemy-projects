@@ -371,3 +371,201 @@ kubectl delete service nginx-svc
 - these commands will delete the deployment and service we created.
 
 ### K8s deployment of NodeJS Sparta test app
+
+- use existing Docker image for sparta-test-app
+- use maintained docker image for Mongo
+
+![k8s-architecture](images/k8s-sparta-test-app.jpg)
+
+- `app-deploy.yml`:
+
+```yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sparta-app-deployment
+  labels:
+    app: sparta-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: sparta-app
+  template:
+    metadata:
+      labels:
+        app: sparta-app
+    spec:
+      containers:
+        - name: sparta-app
+          image: sameem97/sparta-test-app:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: DB_HOST
+              value: "mongodb://mongodb-service:27017/posts"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sparta-app-service
+spec:
+  type: NodePort
+  selector:
+    app: sparta-app
+  ports:
+  - port: 3000
+    targetPort: 3000
+    nodePort: 30001
+```
+
+- `db-deploy.yml`:
+
+```yml
+# mongodb-deploy.yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb-deployment
+  labels:
+    app: mongodb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      containers:
+        - name: mongodb
+          image: mongo:latest
+          ports:
+            - containerPort: 27017
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-service
+spec:
+  selector:
+    app: mongodb
+  ports:
+    - port: 27017
+      targetPort: 27017
+  type: ClusterIP
+```
+
+- `localhost:30001`:
+
+![sparta-app-homepage](images/sparta-homepage.png)
+
+- `localhost:30001/posts`:
+
+![posts page](images/posts-page.png)
+
+- note, the setup above requires `db-deploy.yml` to be up and running first before `app-deploy.yml` is applied. Otherwise due to the connection string referencing the `mongodb-service`, the app fails to connect and crashes. Kubernetes restart policy default (Always) causes a restart loop.
+
+### Create 2-tier deployment with PV for database
+
+- currently mongodb uses container filesystem for storage
+- pods are ephemeral in kuberentes by default so if the mongodb pod restarts or is rescheduled, the data would be lost, which is not acceptable of course.
+- to solve this, we can use Persistant Volumes (PV) and Persistent Volume Claims (PVC).
+
+![persistent volumes](images/persistent-volumes.png)
+
+- PV represents a storage volume in a cluster, provisioned by a cluster admin.
+- they are similar to physical storage devices found on the host machine
+- they exist independently of any pod's lifecycle
+- when bound to a pod, they function similarly to regular volumes, offering a reliable means of data storage.
+- PVC is the user's `claim` for the platform to create a PV on their behalf. If a suitable PV exists already, then the cluster will `bind` the PVC to the PV.
+- PV can be backed by local disk or cloud storage, NFS etc. In our case, we will use the local host filesystem for simplicity, `hostPath`.
+
+- `db-pv.yml`:
+
+```yml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mongodb-pv
+spec:
+  capacity:
+    storage: 100Mi # provision 100mb
+  accessModes:
+    - ReadWriteOnce # The volume can be mounted as read-write by a single node (my local machine)
+  hostPath:
+    path: "/data/mongodb"  # Local host storage path where the data will be stored
+  persistentVolumeReclaimPolicy: Retain
+
+```
+
+- `db-pvc.yml`:
+
+```yml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+```
+
+- modify `db-deploy.yml` to use PV:
+
+```yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb-deployment
+  labels:
+    app: mongodb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      containers:
+        - name: mongodb
+          image: mongo:latest
+          ports:
+            - containerPort: 27017
+          volumeMounts:
+            - name: mongodb-persistent-storage
+              mountPath: /data/db
+      volumes:
+        - name: mongodb-persistent-storage
+          persistentVolumeClaim:
+            claimName: mongodb-pvc # This is the name of the PVC that we created earlier
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-service
+spec:
+  selector:
+    app: mongodb
+  ports:
+    - port: 27017
+      targetPort: 27017
+  type: ClusterIP
+```
+
+- can see above in `db-deploy.yml` we have defined a volume called `mongodb-persistent-storage` which is referencing the PVC `mongodb-pvc` that we created earlier.
+
+- once we have created the resources in the order: pv -> pvc -> mongodb -> app, confirm the app and /posts page is running.
+- to test our PV is working properly, delete and re-create the mongodb deployment. The /posts page should show the same posts as before.
+

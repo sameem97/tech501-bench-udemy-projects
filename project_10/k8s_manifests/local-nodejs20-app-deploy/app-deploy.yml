@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sparta-app-deployment
+  labels:
+    app: sparta-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: sparta-app
+  template:
+    metadata:
+      labels:
+        app: sparta-app
+    spec:
+      containers:
+        - name: sparta-app
+          image: sameem97/sparta-test-app:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: DB_HOST
+              value: "mongodb://mongodb-service:27017/posts"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sparta-app-service
+spec:
+  type: NodePort
+  selector:
+    app: sparta-app
+  ports:
+  - port: 3000
+    targetPort: 3000
+    nodePort: 30001
