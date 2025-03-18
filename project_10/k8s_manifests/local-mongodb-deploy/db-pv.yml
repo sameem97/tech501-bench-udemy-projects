@@ -8,5 +8,5 @@ spec:
   accessModes:
     - ReadWriteOnce # The volume can be mounted as read-write by a single node (my local machine)
   hostPath:
-    path: "/data/mongodb"  # Local host storage path where the data will be stored
-  persistentVolumeReclaimPolicy: Retain
+    path: "/var/lib/mongodb"  # Local host (Docker Desktop Kubernetes VM) storage path where the data will be stored
+  persistentVolumeReclaimPolicy: Retain # keep PV data even after PVC is deleted

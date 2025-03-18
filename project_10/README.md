@@ -274,7 +274,7 @@ kubectl apply -f nginx-service.yml
 
 - The reason for the above is that minikube with docker driver, which I have been using so far for testing, runs the kubernetes cluster inside a docker container with its own IP (minikube IP). So in other words, if I `minikube ssh` into the container, I can run `curl localhost:30001` to get the contents of the amended nginx page. But this wouldn't work on my local machine outside the minikube container.
 - To access it from my local machine, I can use minikube's built in service URL. shown by running: `minikube service nginx-svc --url`. This works because minikube forwards the service to a random localhost port e.g. `http://127.0.0.1:5217`, essentially running a `kubectl port-forward` session in the background. This new url will work and the app will load.
-- For simplicity, moving forward, I am now using docker desktop's `kubeadm` which runs kubernetes directly on my local machine (not inside a container). Enabling this in docker desktop, checking cluster status, changing kubectl context and recreating the services - the page now loads up via `localhost:30001`.
+- For simplicity, moving forward, I am now using docker desktop's `kubeadm` which runs kubernetes in a (HyperKit) VM on my local machine. Enabling this in docker desktop, checking cluster status, changing kubectl context and recreating the services - the page now loads up via `localhost:30001`.
 
 ![nginx welcome amended](images/nginx-welcome-amended.png)
 
@@ -473,7 +473,7 @@ spec:
 ### Create 2-tier deployment with PV for database
 
 - currently mongodb uses container filesystem for storage
-- pods are ephemeral in kuberentes by default so if the mongodb pod restarts or is rescheduled, the data would be lost, which is not acceptable of course.
+- pods are ephemeral in kubernetes by default so if the mongodb pod restarts or is rescheduled, the data would be lost, which is not acceptable of course.
 - to solve this, we can use Persistant Volumes (PV) and Persistent Volume Claims (PVC).
 
 ![persistent volumes](images/persistent-volumes.png)
@@ -498,9 +498,8 @@ spec:
   accessModes:
     - ReadWriteOnce # The volume can be mounted as read-write by a single node (my local machine)
   hostPath:
-    path: "/data/mongodb"  # Local host storage path where the data will be stored
-  persistentVolumeReclaimPolicy: Retain
-
+    path: "/var/lib/mongodb"  # Local host (Docker Desktop Kubernetes VM) storage path where the data will be stored
+  persistentVolumeReclaimPolicy: Retain # keep PV data even after PVC is deleted
 ```
 
 - `db-pvc.yml`:
@@ -516,6 +515,8 @@ spec:
   resources:
     requests:
       storage: 100Mi
+  volumeName: mongodb-pv
+  storageClassName: "" # This is an empty string because we are using the default storage class
 ```
 
 - modify `db-deploy.yml` to use PV:
@@ -539,12 +540,19 @@ spec:
     spec:
       containers:
         - name: mongodb
-          image: mongo:latest
+          image: mongo:7.0
           ports:
             - containerPort: 27017
           volumeMounts:
             - name: mongodb-persistent-storage
-              mountPath: /data/db
+              mountPath: /data/db # container path where the data will be stored
+          resources: # resource requests and limits
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "0.5Gi"
+              cpu: "500m"
       volumes:
         - name: mongodb-persistent-storage
           persistentVolumeClaim:
@@ -567,5 +575,48 @@ spec:
 - can see above in `db-deploy.yml` we have defined a volume called `mongodb-persistent-storage` which is referencing the PVC `mongodb-pvc` that we created earlier.
 
 - once we have created the resources in the order: pv -> pvc -> mongodb -> app, confirm the app and /posts page is running.
-- to test our PV is working properly, delete and re-create the mongodb deployment. The /posts page should show the same posts as before.
 
+#### Verify data persistence
+
+- since we are using hostPath volume which simply mounts an existing directory inside the Docker Kubernetes VM on our local machine to the container, to confirm persistence we can make a change on the container mountPath `/data/db` e.g. create test file, and see if this appears in our hostPath `/var/lib/mongodb` on the VM.
+- use docker desktop to access mongodb container filesystem, create `test-file`.
+- use `nsenter1` to access the VM's process namespace (different but similar to ssh for our purposes):
+
+```bash
+docker run --rm -it --privileged --pid=host justincormack/nsenter1
+```
+
+- confirm the `test-file` exists on the VM in `/var/lib/mongodb`.
+- if so, then the mongodb data is persisting outside the container.
+- so re-creating the container will mount the same hostPath on the VM so e.g. creating an extra post via mongosh (see below) for example will persist even when the container is re-created.
+
+1. Connect to mongodb and add some test data:
+
+```bash
+kubectl exec -it <mongodb_pod> -- mongosh --eval 'db.posts.insert({title:"Test Post", body:"This is a test post to verify data persistence"})'
+```
+
+2. Delete the mongodb pod.
+
+```bash
+kctl delete pod <mongodb_pod>
+```
+
+- Wait for deployment to re-create the pod.
+- When the new pod comes up, it will mount the same `/var/lib/mongodb` path.
+
+3. Check if the data persisted.
+
+- query for the test data:
+
+```bash
+kubectl exec -it <mongodb+pod> -- mongosh --eval 'db.posts.find().pretty()'
+```
+
+- this should show the data you inserted earlier.
+- the reason is because that post persisted in the hostPath directory which is mounted in the container filesystem.
+
+### Extention: Remove PVC/PV and retain data
+
+- since we used hostPath volume, deleting PV and PVC will still retain the data in the hostPath directory on our Docker Kubernetes VM.
+- so recreating the PV and PVC, the hostPath will simply be mounted by the container in the mountPath so the data will persist the same as previously.

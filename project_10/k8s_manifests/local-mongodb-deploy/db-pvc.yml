@@ -8,3 +8,5 @@ spec:
   resources:
     requests:
       storage: 100Mi
+  volumeName: mongodb-pv
+  storageClassName: "" # This is an empty string because we are using the default storage class
