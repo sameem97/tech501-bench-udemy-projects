@@ -620,3 +620,324 @@ kubectl exec -it <mongodb+pod> -- mongosh --eval 'db.posts.find().pretty()'
 
 - since we used hostPath volume, deleting PV and PVC will still retain the data in the hostPath directory on our Docker Kubernetes VM.
 - so recreating the PV and PVC, the hostPath will simply be mounted by the container in the mountPath so the data will persist the same as previously.
+
+### Setup Minikube on cloud instance running ubuntu 22.04 LTS
+
+- AWS EC2 instance size t3a.small
+- image ubuntu 22.04 LTS
+- first install Docker, test by running `hello-world` image
+- then install minikube, test with `minikube start`
+- may need to grant $USER permission to access Docker daemon without using `sudo`
+- lastly, need to install kubectl to interact with the minikube cluster
+- check context is minikube: `kubectl config current-context`
+
+### Deploy three apps on single cloud instance running Minikube
+
+- aim: deploy three apps on minikube that will run at the same time and be exposed to the outside world at different endpoints.
+
+#### First app deployment
+
+- use NodePort service at NodePort 30001
+- use image: `daraymonsta/nginx-257:dreamteam` with container port 80.
+- app container should have 5 replicas.
+- configure nginx reverse proxy so you can access the app externally via: `<ec2_public_ip>:80`
+
+- `nginx-deploy.yml`:
+
+```yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: daraymonsta/nginx-257:dreamteam
+          ports:
+            - containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+spec:
+  type: NodePort
+  selector:
+    app: nginx
+  ports:
+  - port: 80 # exposed service port
+    targetPort: 80 # target container port
+    nodePort: 30001 # exposed node port
+```
+
+- apply the config, confirm you can access nginx via:
+
+```bash
+curl <minikube_ip>:30001
+```
+
+- should show html contents of nginx page.
+- since minikube is running in a docker container on the EC2, need to use nginx reverse proxy to forward requests from port 80 on the ec2 to the minikube ip port 30001.
+- first install nginx on the ec2 instance.
+
+```bash
+sudo apt update && sudo apt install nginx -y
+```
+
+- note minikube ip and nodeport, will input this in nginx.conf file below:
+
+```bash
+sudo nano /etc/nginx/sites-available/default
+```
+
+- replace *try_files* line in *default server block* with: `proxy_pass http://<minikube_ip>:30001;`
+- reload nginx: `sudo systemctl reload nginx`
+- on your local machine can now access nginx via: `<ec2_public_ip>` i.e. default port 80. Nginx reverse proxy is forwarding the request to the minikube container, nodeport running our nginx app.
+
+![nginx welcome page](images/nginx-welcome-amended.png)
+
+#### Second app deployment
+
+- use loadbalancer service at port 9000
+- use `minikube tunnel` to emulate loadbalancer on the ec2 instance.
+- use image `daraymonsta/tech201-nginx-auto:v1` with container port 80.
+  - app container should have two replicas
+- use nginx reverse proxy on the ec2 to forward requests sent to `<ec2_public_ip>:9000` to minikube loadbalancer endpoint i.e. `<lb_external_ip>:9000`. The load balancer will then forward the requests to a given pod with the app container.
+- app able to be accessed from outside the ec2 via `<ec2-public-ip>:9000`
+
+---
+
+- Question - Why do we need to use minikube tunnel?
+
+- in typical cloud environments e.g. AWS, when you create loadbalancer service, the cloud provider (e.g. AWS ELB service) automatically provisions external IP and routes traffic to your kubernetes cluster.
+- since minikube does not run on a real cloud, so:
+  - It cannot request a real loadbalancer IP from a cloud provider.
+  - By default, `kubectl get service` will show `<pending>` in the EXTERNAL-IP field for loadbalancer services.
+  - Minikube Tunnel creates a local *loadbalancer simulation* by assigning an internal IP (e.g., 10.x.x.x) to the loadbalancer service, which is reachable **within** the ec2 instance specifying the load balancer exposed port.
+
+  - e.g. without minikube tunnel:
+
+```bash
+`kubectl get service my-app-service`
+```
+
+```pgsql
+NAME             TYPE           CLUSTER-IP       EXTERNAL-IP   PORT(S)        AGE
+my-app-service   LoadBalancer   10.109.200.234   <pending>     9000:30002/TCP 10s
+```
+
+  - with minikube tunnel:
+
+```bash
+sudo minikube tunnel
+kubectl get service my-app-service
+```
+
+```pgsql
+NAME             TYPE           CLUSTER-IP       EXTERNAL-IP      PORT(S)        AGE
+my-app-service   LoadBalancer   10.109.200.234   <10.x.x.x>        9000:30002/TCP 10s
+```
+
+- as visible, the external ip is `10.x.x.x` meaning minikube has created a proxy.
+- so any traffic from **within** ec2 sent to <external_ip>:9000 i.e. minikube loadbalancer endpoint will be forwarded to a given pod with relevant label.
+- so essentially, `minikube tunnel` allows the loadbalancer service to be reached from within the ec2. But to be able to access it from outside the ec2, we will need to use nginx reverse proxy.
+- do also note, `10.x.x.x` IP is part of the private minikube network. This is the case for us because we are using minikube in a docker container. If we were using kubernetes in a VM or bare metal, the assigned external IP would be `127.0.0.1` i.e. ec2 localhost. But in our case, the assigned external IP is private because minikube network can't reach ec2 network stack.
+
+---
+
+- create `nginx-deploy-2.yml`:
+
+```yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment-2
+  labels:
+    app: nginx-tech201
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx-tech201
+  template:
+    metadata:
+      labels:
+        app: nginx-tech201
+    spec:
+      containers:
+        - name: nginx
+          image: daraymonsta/tech201-nginx-auto:v1
+          ports:
+            - containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-lb-service
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 9000      # External LoadBalancer Port
+      targetPort: 80   # Container Port
+      nodePort: 30002
+  selector:
+    app: nginx-tech201
+```
+
+- have defined loadbalancer service exposing port 9000 on loadbalancer (<lb_external_ip>:9000 endpoint via minikube tunnel) and container port 80 as exposed in the deployment.
+- please note, `nodeport: 30002` is optional. Typically load balancer services won't utilise this but in minikube a loadbalancer is actually a wrapper around a nodeport and this nodeport is automatically assigned. In my case, I have explicitly chosen 30002.
+- apply the deployment.
+- check service:
+
+```bash
+kubectl get service nginx-lb-service
+```
+
+- `EXTERNAL IP` will show pending as expected.
+
+- enable minikube tunnel in background:
+
+```bash
+sudo -E nohup minikube tunnel > tunnel.log 2>&1 &
+```
+
+- check service again:
+
+```bash
+kubectl get service nginx-lb-service
+```
+
+- should show `EXTERNAL IP` in `10.x.x.x` range.
+
+![lb service after tunnel](images/lb-service-after-tunnel.png)
+
+- test you can reach loadbalancer endpoint within ec2:
+
+```bash
+curl 10.96.85.246:9000
+```
+
+- should show html contents of the nginx service:
+
+```html
+<html>
+    <head>
+        <title>Welcome to Ramon's wonderland</title>
+    </head>
+    <body>
+        <h1>Welcome to Ramon's wonderland</h1>
+        <h3>Coming here was the best decision of your life.</h3>
+    </body>
+</html>
+```
+
+- now we need to configure nginx reverse proxy.
+- edit the conf file:
+
+```bash
+sudo nano /etc/nginx/sites-available/default
+```
+
+- add new server block as below:
+
+```nginx
+server {
+    listen 9000;
+    server_name _;
+
+    location / {
+        proxy_pass http://10.96.85.246:9000;
+    }
+}
+
+```
+
+- reload nginx:
+
+```bash
+sudo systemctl restart nginx
+```
+
+- try to access the nginx app now from your local machine: `<ec2_public_ip>:9000`
+
+![nginx tech201 homepage](images/nginx_tech201_homepage.png)
+
+#### Third app deployment
+
+- deploy `hello-minikube` as the third app
+  - use official [documentation](https://kubernetes.io/docs/tutorials/hello-minikube/])
+
+- create deployment:
+
+```bash
+kubectl create deployment hello-node --image=registry.k8s.io/e2e-test-images/agnhost:2.39 -- /agnhost netexec --http-port=8080
+```
+
+- verify deployment with `kubectl get deployments`:
+
+![hello node deployment](images/hello-node-deployment.png)
+
+- verify that the pod has been created with `kubectl get pods`:
+
+![hello node pods](images/hello-node-pods.png)
+
+- expose the pod externally via a loadbalancer service port 8080.
+
+```bash
+kubectl expose deployment hello-node --type=LoadBalancer --port=8080
+```
+
+- check loadbalancer service status:
+
+```bash
+kubectl get service
+```
+
+![hello node service](images/hello-node-service.png)
+
+- as we have minikube tunnel still running in the background, we have an external IP provided to hello-node service which can be accessed within the cluster as shown by curl:
+
+```bash
+curl 10.108.153.97:8080
+```
+
+NOW: 2025-03-19 17:53:27.773981395 +0000 UTC m=+849.127694601
+
+- configure nginx reverse proxy to forward request to this loadbalancer endpoint when user's access: `<ec2_public_ip>/hello`
+- add location block to default server:
+
+```nginx
+        location /hello {
+                proxy_pass http://10.108.153.97:8080;
+```
+
+- reload nginx:
+
+```bash
+sudo systemctl restart nginx
+```
+
+- check access in the browser now: `<ec2_public_ip>/hello`
+
+![hello minikube](images/hello-minikube.png)
+
+- can cleanup all resources via:
+
+```bash
+kubectl delete all --all -n default
+```
+
+### Use Kubernetes to deploy the Sparta test app in the cloud
