@@ -442,9 +442,16 @@ spec:
     spec:
       containers:
         - name: mongodb
-          image: mongo:latest
+          image: mongo:7.0
           ports:
             - containerPort: 27017
+          resources: # resource requests and limits
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "0.5Gi"
+              cpu: "500m"
 
 ---
 apiVersion: v1
@@ -941,3 +948,271 @@ kubectl delete all --all -n default
 ```
 
 ### Use Kubernetes to deploy the Sparta test app in the cloud
+
+- need to deploy app and db on the ec2 using minikube
+- define PV for db of 100MB
+- use HPA to scale the app, min 2, max 10 replicas - load test to check it works
+- use Nodeport service and Nginx reverse proxy to expose the app to port 80 of the instance's public IP.
+- ensure `minikube start` happens automatically on re-start of the instance.
+
+- will use the same manifest files as before:
+
+- db-pv.yml:
+
+```yml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mongodb-pv
+spec:
+  capacity:
+    storage: 100Mi # provision 100mb
+  accessModes:
+    - ReadWriteOnce # The volume can be mounted as read-write by a single node (my local machine)
+  hostPath:
+    path: "/var/lib/mongodb"  # Local host storage path where the data will be stored
+  persistentVolumeReclaimPolicy: Retain # keep PV data even after PVC is deleted
+```
+
+- db-pvc.yml:
+
+```yml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
+  volumeName: mongodb-pv
+  storageClassName: "" # This is an empty string because we are using the default storage class
+```
+
+- db-deploy.yml:
+
+```yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb-deployment
+  labels:
+    app: mongodb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      containers:
+        - name: mongodb
+          image: mongo:7.0
+          ports:
+            - containerPort: 27017
+          volumeMounts:
+            - name: mongodb-persistent-storage
+              mountPath: /data/db # container path where the data will be stored
+          resources: # resource requests and limits
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "0.5Gi"
+              cpu: "500m"
+      volumes:
+        - name: mongodb-persistent-storage
+          persistentVolumeClaim:
+            claimName: mongodb-pvc # This is the name of the PVC that we created earlier
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-service
+spec:
+  selector:
+    app: mongodb
+  ports:
+    - port: 27017
+      targetPort: 27017
+  type: ClusterIP
+```
+
+- app-deploy.yml:
+
+```yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sparta-app-deployment
+  labels:
+    app: sparta-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: sparta-app
+  template:
+    metadata:
+      labels:
+        app: sparta-app
+    spec:
+      containers:
+        - name: sparta-app
+          image: sameem97/sparta-test-app:multiarch
+          ports:
+            - containerPort: 3000
+          env:
+            - name: DB_HOST
+              value: "mongodb://mongodb-service:27017/posts"
+          resources:
+            requests:
+              cpu: "100m"  # this is required for HPA to work
+            limits:
+              cpu: "500m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sparta-app-service
+spec:
+  type: NodePort
+  selector:
+    app: sparta-app
+  ports:
+  - port: 3000
+    targetPort: 3000
+    nodePort: 30002
+```
+
+- ensure nginx reverse proxy is forwarding requests to: `<minikube_ip>:nodeport`
+- apply the above, ensure homepage and /posts page load up.
+
+- implement HPA:
+  - enable metrics server - will allow kubernetes to track CPU/memory usage:
+
+  ```bash
+  minikube addons enable metrics-server
+  ```
+
+  - deploy HPA:
+
+  ```bash
+  kubectl autoscale deployment sparta-app-deployment --cpu-percent=20 --min=2 --max=10
+  ```
+
+  - verify HPA is active:
+
+  ```bash
+  kubectl get hpa
+  ```
+
+- load testing:
+  - install apache bench:
+
+  ```bash
+  sudo apt install apache2-utils -y
+  ```
+
+  - simulate high traffic via apache bench:
+
+  ```bash
+  ab -n 5000 -c 50 "http://<minikube_ip>:30002/"
+  ```
+
+  - watch cpu activity with:
+
+  ```bash
+  kubectl get hpa -w
+  ```
+
+  ![cpu activity](images/cpu-activity.png)
+
+  - can see new pods have been created (10) as usage above threshold, and eventually destroyed (remaining 2) as usage is lowered.
+
+  - can also observe the pods as they were created with `kubectl get pods`.
+
+  - can also `describe` deployment and see mention of `scaled up`.
+
+  - note HPA minimums take precedence over number of replicas defined in deployment file hence ended up with 2 replicas by the end.
+  
+- auto start minikube on ec2 restart:
+  - need to create systemd service.
+
+  ```bash
+  sudo nano /etc/systemd/system/minikube.service
+  ```
+
+  ```ini
+  [Unit] # section describes when and how service should start
+  Description=Minikube Kubernetes Cluster
+  After=network-online.target firewalld.service containerd.service docker.service # start kubernetes after these services are ready
+  Wants=network-online.target docker.service
+  Requires=docker.socket containerd.service docker.service # ensure running before starting minikube
+
+  [Service] # defines how the service runs
+  Type=oneshot # run once then exit
+  RemainAfterExit=yes # systemd will consider service "active" even after it has finished running
+  ExecStart=/usr/local/bin/minikube start --driver=docker # starts minikube with docker driver
+  ExecStop=/usr/local/bin/minikube stop # stops minikube gracefully on shutdown
+  User=ubuntu # run minikube as ubuntu user instead of root
+
+  [Install] # defines how the service integrates into the system
+  WantedBy=multi-user.target # ensures minikube starts when the system reaches multi-user mode i.e. on every boot
+  ```
+
+  - after creating the file, enable and start the service:
+
+  ```bash
+  sudo systemctl daemon-reload
+  sudo systemctl enable minikube
+  ```
+
+  - this makes sure minikube starts automatically after reboot.
+
+  - start minikube immediately:
+
+  ```bash
+  sudo systemctl start minikube
+  ```
+
+  - check service status:
+
+  ```bash
+  sudo systemctl status minikube
+  ```
+
+  ![minikube service status](images/minikube-service-status.png)
+
+  - can restart or stop the service:
+
+  ```bash
+  sudo systemctl restart minikube
+  sudo systemctl stop minikube
+  ```
+
+  - now minikube will always start automatically after an ec2 reboot!
+  - will be able to access the app and /posts page as previously.
+  - cluster state is all preserved thanks to etcd stored in container filesystem.
+
+![sparta homepage](images/sparta-homepage.png)
+
+![posts page](images/posts-page-final.png)
+
+## What I learnt
+
+- Kubernetes architecture - lots of moving components in the background e.g. etcd, kubelet, etc. Important to understand their interactions.
+- creating kubernetes objects like pods, deployments, services, HPA etc.
+- how kubernetes powerful mechanisms like self healing and autoscaling are integral to maintaining uptime and reliability.
+
+## Benefits I saw from this project
+
+- autoscaling and self healing very important for system uptime and performance as well e.g. traffic spikes.
+- can handle very large numbers of docker containers, where docker compose wouldn't scale well.

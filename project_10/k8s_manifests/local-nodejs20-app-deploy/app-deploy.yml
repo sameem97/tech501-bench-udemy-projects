@@ -16,13 +16,18 @@ spec:
     spec:
       containers:
         - name: sparta-app
-          image: sameem97/sparta-test-app:latest
+          image: sameem97/sparta-test-app:multiarch
           ports:
             - containerPort: 3000
           env:
             - name: DB_HOST
               value: "mongodb://mongodb-service:27017/posts"
-
+          resources:
+            requests:
+              cpu: "100m"  # this is required for HPA to work
+            limits:
+              cpu: "500m"
+              
 ---
 apiVersion: v1
 kind: Service

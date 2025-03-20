@@ -45,14 +45,14 @@ server {
 
         server_name _;
 
-        # first app (nginx dreamteam)
+        # day 3 first app (nginx dreamteam)
         location / {
                 # First attempt to serve request as file, then
                 # as directory, then fall back to displaying a 404.
                 proxy_pass http://192.168.49.2:30001;
         }
 
-        # third app (hello-minikube)
+        # day 3 third app (hello-minikube)
         location /hello {
                 proxy_pass http://10.108.153.97:8080;
         }
@@ -76,7 +76,7 @@ server {
         #}
 }
 
-# second app (tech201 nginx)
+# day 3 second app (tech201 nginx)
 server {
         listen 9000;
         server_name _;

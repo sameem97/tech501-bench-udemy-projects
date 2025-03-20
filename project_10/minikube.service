@@ -1,0 +1,15 @@
+[Unit] # section describes when and how service should start
+Description=Minikube Kubernetes Cluster
+After=network-online.target firewalld.service containerd.service docker.service # start kubernetes after these services are ready
+Wants=network-online.target docker.service
+Requires=docker.socket containerd.service docker.service # ensure running before starting minikube
+
+[Service] # defines how the service runs
+Type=oneshot # run once then exit
+RemainAfterExit=yes # systemd will consider service "active" even after it has finished running
+ExecStart=/usr/local/bin/minikube start --driver=docker # starts minikube with docker driver
+ExecStop=/usr/local/bin/minikube stop # stops minikube gracefully on shutdown
+User=ubuntu # run minikube as ubuntu user instead of root
+
+[Install] # defines how the service integrates into the system
+WantedBy=multi-user.target # ensures minikube starts when the system reaches multi-user mode i.e. on every boot
